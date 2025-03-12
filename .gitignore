@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# Audio files
+audio/uploads/*
+audio/responses/*
+audio/initial/*
+!audio/initial/initial_response.mp3
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+
+a

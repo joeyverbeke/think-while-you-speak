@@ -37,7 +37,7 @@ An AI voice agent that responds to users **while** they are talking.
 
 4. Start Ollama with the Llama model
     ```bash
-    ollama run llama3.1:8b
+    ollama serve
     ```
 
 5. Start the server

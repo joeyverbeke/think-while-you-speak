@@ -8,12 +8,10 @@ node_modules/
 audio/uploads/*
 audio/responses/*
 audio/initial/*
-!audio/initial/initial_response.mp3
+#!audio/initial/initial_response.mp3
 
 # Logs
 *.log
 
 # OS files
 .DS_Store
-
-a

@@ -25,6 +25,9 @@ const UPLOADS_DIR = path.join(AUDIO_DIR, 'uploads');
 const RESPONSES_DIR = path.join(AUDIO_DIR, 'responses');
 const INITIAL_DIR = path.join(AUDIO_DIR, 'initial');
 
+//Single or multiple personalities
+const PERSONALITY_MODE = process.env.PERSONALITY_MODE || 'single';
+
 // Initialize the audio directories
 function initializeAudioDirectories() {
     [AUDIO_DIR, UPLOADS_DIR, RESPONSES_DIR, INITIAL_DIR].forEach(dir => {
@@ -113,7 +116,13 @@ const PersonalityManager = {
     // Tracked personalities
     activePersonalities: ['advisor', 'critic', 'supporter'],
     currentPersonalityIndex: 0,
-    
+    currentPersonality: null,
+
+    //
+    setPersonality(personalityId) {
+      this.currentPersonality = personalities[personalityId];
+    },
+
     // Get the next personality to respond (round-robin style)
     getNextPersonality() {
         const personalityId = this.activePersonalities[this.currentPersonalityIndex];
@@ -142,8 +151,14 @@ app.post('/query-llama', async (req, res) => {
             return res.json({ response: '' });
         }
         
-        // Choose the next personality to respond
-        const personality = PersonalityManager.getNextPersonality();
+        // Choose personality based on PERSONALITY_MODE
+        let personality;
+        if (process.env.PERSONALITY_MODE === 'multiple') {
+            personality = PersonalityManager.getNextPersonality();
+        } else {
+            // If not multiple, use the current personality or default to advisor
+            personality = PersonalityManager.currentPersonality || PersonalityManager.getPersonality('advisor');
+        }
         const personalityId = personality.id;
         
         timeLog(`Selected personality: ${personality.name} (${personalityId})`);
@@ -278,5 +293,5 @@ app.post('/transcribe', async (req, res) => {
 // Initialize directories when the server starts
 app.listen(port, () => {
     initializeAudioDirectories();
-    console.log(`Backend running at http://localhost:${port}`);
+    timeLog(`Backend running at http://localhost:${port}`);
 });

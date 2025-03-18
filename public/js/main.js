@@ -17,6 +17,7 @@ let pendingTranscriptions = []; // Store transcriptions while processing
 let processingPromise = null; // Store the current processing promise
 let audioContext;
 let pannerNodes = new Map(); // Store panner nodes for each voice
+let isFirstSpeech = true;
 
 function initializeAudioContext() {
     try {
@@ -145,12 +146,34 @@ async function fetchLastAudio() {
 async function initializeVAD() {
     const startTime = timeLog('Initializing VAD...');
     vadInstance = await vad.MicVAD.new({
+
+        //TODO: Adjust thresholds and model
+        positiveSpeechThreshold: 0.5,
+        negativeSpeechThreshold: 0.35,
+        model: "v5",
+
         onSpeechStart: async () => {
             timeLog('🎤 Speech detected');
             isCurrentlySpeaking = true;
 
+            // If this is the first speech, play initial response
+            if (isFirstSpeech) {
+                timeLog('Playing initial response');
+                const initialResponse = await fetch('/last-audio');
+                if (initialResponse.ok) {
+                    const blob = await initialResponse.blob();
+                    // Use advisor's position for initial response
+                    const advisorPosition = { x: 0, y: 0, z: 1 };
+                    playAudio({
+                        blob,
+                        voiceId: 'advisor',
+                        position: advisorPosition
+                    });
+                }
+                isFirstSpeech = false;
+            }
             // If there's queued audio, always prefer that over current audio
-            if (audioQueue.length > 0) {
+            else if (audioQueue.length > 0) {
                 timeLog('Playing new queued audio');
                 currentAudioData = null;  // Clear current audio
                 playAudio(audioQueue.shift());

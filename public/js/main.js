@@ -19,6 +19,9 @@ let startBtn;
 let stopBtn;
 let debugEl;
 
+// Add device selection state
+let selectedInputDevice = null;
+
 function updateStatus(message) {
     if (statusEl) {
         statusEl.textContent = message;
@@ -65,15 +68,64 @@ function initializeIOSAudio() {
     });
 }
 
-function initializeAudioContext() {
+// Modify getAudioDevices to only handle input devices
+async function getAudioDevices() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioDevices = {
+        inputs: devices.filter(device => device.kind === 'audioinput')
+    };
+    timeLog(`Found ${audioDevices.inputs.length} input devices:`);
+    audioDevices.inputs.forEach(device => {
+        timeLog(`- ${device.label} (${device.deviceId})`);
+    });
+    return audioDevices;
+}
+
+// Update createDeviceSelectors to only create input selector
+function createDeviceSelectors(audioDevices) {
+    const container = document.querySelector('.button-container');
+    
+    // Create input selector
+    const inputSelector = document.createElement('select');
+    inputSelector.id = 'inputSelector';
+    inputSelector.className = 'device-selector';
+    
+    // Add a default option
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.text = 'Default Microphone';
+    inputSelector.appendChild(defaultOption);
+    
+    audioDevices.inputs.forEach(device => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.text = device.label || `Microphone ${device.deviceId.slice(0, 5)}`;
+        inputSelector.appendChild(option);
+    });
+    
+    // Add to page before the start button
+    container.insertBefore(inputSelector, startBtn);
+    
+    return { inputSelector };
+}
+
+// Modify initializeAudioContext to use selected output device
+async function initializeAudioContext() {
     try {
         if (!audioContext) {
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
         }
         
-        // Ensure audio context is running (important for iOS)
         if (audioContext.state === 'suspended') {
-            audioContext.resume();
+            await audioContext.resume();
+        }
+
+        // If we have a selected output device and the browser supports setSinkId
+        if (selectedInputDevice && typeof HTMLAudioElement.prototype.setSinkId === 'function') {
+            // Create a dummy audio element to set the sink ID
+            const dummy = new Audio();
+            await dummy.setSinkId(selectedInputDevice);
+            timeLog(`Set audio output to device: ${selectedInputDevice}`);
         }
         
         // Set up listener position only
@@ -99,7 +151,7 @@ function initializeAudioContext() {
         timeLog('Audio context initialized');
         updateStatus('Audio initialized');
     } catch (error) {
-        console.error('Web Audio API not supported:', error);
+        console.error('Audio initialization error:', error);
         updateStatus('Audio initialization failed');
     }
 }
@@ -218,6 +270,7 @@ async function fetchLastAudio() {
     }
 }
 
+// Update VAD initialization to properly use selected input device
 async function initializeVAD() {
     updateStatus('Initializing speech detection...');
     const startTime = timeLog('Initializing VAD...');
@@ -226,12 +279,25 @@ async function initializeVAD() {
         const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
         
-        timeLog(`Detected browser: ${isSafari ? 'Safari' : 'Other'}, iOS: ${isIOS}`);
-        
-        // Create VAD configuration with event handlers included
+        // Get current input device constraints
+        const constraints = {
+            audio: selectedInputDevice ? 
+                {
+                    deviceId: { exact: selectedInputDevice },
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                } : 
+                true
+        };
+
+        // Test the constraints before VAD initialization
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        timeLog('Successfully got media stream with constraints:', constraints);
+
         const vadConfig = {
-            // Model and threshold settings
             model: 'legacy',
+            audioConstraints: constraints,
             positiveSpeechThreshold: isIOS ? 0.8 : 0.5,
             negativeSpeechThreshold: isIOS ? 0.5 : 0.35,
             minSpeechFrames: isIOS ? 7 : 3,
@@ -326,7 +392,10 @@ async function initializeVAD() {
             }
         };
 
-        timeLog('Creating VAD with config');
+        // Stop the test stream before creating VAD
+        stream.getTracks().forEach(track => track.stop());
+
+        timeLog('Creating VAD with config:', vadConfig);
         vadInstance = await vad.MicVAD.new(vadConfig);
         
         // Start VAD immediately
@@ -418,13 +487,50 @@ async function processUserSpeech(transcription) {
 }
 
 // Initialize event listeners when the DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     statusEl = document.getElementById('status');
     startBtn = document.getElementById('startBtn');
     stopBtn = document.getElementById('stopBtn');
     debugEl = document.getElementById('debug');
     
     stopBtn.disabled = true;
+    
+    try {
+        // Get initial device permissions
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        // Get available devices
+        const audioDevices = await getAudioDevices();
+        
+        // Create input selector
+        const { inputSelector } = createDeviceSelectors(audioDevices);
+        
+        // Listen for device selection changes
+        inputSelector.onchange = async (e) => {
+            selectedInputDevice = e.target.value;
+            timeLog(`Selected input device: ${selectedInputDevice}`);
+            
+            // Restart VAD if it's running
+            if (vadInstance) {
+                vadInstance.pause();
+                await initializeVAD();
+            }
+        };
+        
+        // Try to automatically select Bluetooth device if available
+        const bluetoothInput = audioDevices.inputs.find(d => 
+            d.label.toLowerCase().includes('bluetooth') || 
+            d.label.toLowerCase().includes('airpods')
+        );
+        
+        if (bluetoothInput) {
+            inputSelector.value = bluetoothInput.deviceId;
+            selectedInputDevice = bluetoothInput.deviceId;
+            timeLog(`Auto-selected Bluetooth device: ${bluetoothInput.label}`);
+        }
+    } catch (error) {
+        console.error('Error setting up device selection:', error);
+    }
     
     startBtn.onclick = async () => {
         updateStatus('Initializing audio...');

@@ -36,6 +36,9 @@ const INITIAL_DIR = path.join(AUDIO_DIR, 'initial');
 //Single or multiple personalities
 const PERSONALITY_MODE = process.env.PERSONALITY_MODE || 'single';
 
+// Add at the top with other env vars
+const DEBUG = process.env.DEBUG === 'true';
+
 // Initialize the audio directories
 function initializeAudioDirectories() {
     [AUDIO_DIR, UPLOADS_DIR, RESPONSES_DIR, INITIAL_DIR].forEach(dir => {
@@ -217,7 +220,7 @@ app.get('/last-audio', (req, res) => {
   }
 });
 
-// Update process-text endpoint with more logging
+// Modify process-text endpoint
 app.post('/process-text', async (req, res) => {
     const startTime = timeLog('Starting text-only processing');
     try {
@@ -233,6 +236,15 @@ app.post('/process-text', async (req, res) => {
         }
 
         timeLog(`Using personality: ${personality.name} with voice ID: ${personality.voiceId}`);
+
+        if (DEBUG) {
+            // In debug mode, always return initial_response.mp3
+            const debugAudioPath = path.join(INITIAL_DIR, 'initial_response.mp3');
+            timeLog('DEBUG MODE: Using initial_response.mp3');
+            res.set('Content-Type', 'audio/mpeg');
+            res.send(fs.readFileSync(debugAudioPath));
+            return;
+        }
 
         const audioFilePath = path.join(RESPONSES_DIR, `response_${personalityId}_${Date.now()}.mp3`);
         await synthesizeSpeech(text, audioFilePath, personality.voiceId);

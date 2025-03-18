@@ -4,11 +4,19 @@ const fs = require('fs');
 const axios = require('axios');
 const { exec } = require('child_process');
 const path = require('path');
+const https = require('https');
 require('dotenv').config();
 const { personalities } = require('./personalities');
+const os = require('os');
 
 const app = express();
 const port = 3000;
+
+// Add HTTPS credentials
+const credentials = {
+    key: fs.readFileSync(path.join(__dirname, 'certs', 'key.pem')),
+    cert: fs.readFileSync(path.join(__dirname, 'certs', 'cert.pem'))
+};
 
 // Add these middleware configurations before your routes
 app.use(express.json({limit: '50mb'}));
@@ -290,10 +298,37 @@ app.post('/transcribe', async (req, res) => {
     }
 });
 
-// Initialize directories when the server starts
-app.listen(port, () => {
+// Add this function to get all available IP addresses
+function getIpAddresses() {
+    const interfaces = os.networkInterfaces();
+    const addresses = [];
+    
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            // Skip internal and non-IPv4 addresses
+            if (iface.family === 'IPv4' && !iface.internal) {
+                addresses.push(iface.address);
+            }
+        }
+    }
+    
+    return addresses;
+}
+
+// Update the server creation and listening
+const httpsServer = https.createServer(credentials, app);
+
+httpsServer.listen(port, '0.0.0.0', () => {
     initializeAudioDirectories();
-    timeLog(`Backend running at http://localhost:${port}`);
+    
+    const addresses = getIpAddresses();
+    timeLog(`Backend running at https://localhost:${port}`);
+    
+    if (addresses.length > 0) {
+        addresses.forEach(ip => {
+            timeLog(`Also available at https://${ip}:${port}`);
+        });
+    }
 });
 
 //create mobile-integration branch

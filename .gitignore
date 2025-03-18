@@ -15,3 +15,7 @@ audio/initial/*
 
 # OS files
 .DS_Store
+
+# SSL Certificates
+certs/
+*.pem

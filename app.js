@@ -5,6 +5,7 @@ const axios = require('axios');
 const { exec } = require('child_process');
 const path = require('path');
 require('dotenv').config();
+const { personalities } = require('./personalities');
 
 const app = express();
 const port = 3000;
@@ -13,13 +14,7 @@ const port = 3000;
 app.use(express.json({limit: '50mb'}));
 app.use(express.static('public'));
 
-const conversationHistory = [];
-
 const FormData = require('form-data');
-
-// Add these constants near the top with others
-const MAX_HISTORY_LENGTH = 10; // Keep last 5 exchanges
-const MAX_TOTAL_CHARS = 2000; // Limit total character length of history
 
 // Either local or remote
 const COMPUTE_IP = process.env.REMOTE_DESKTOP_IP;
@@ -51,34 +46,25 @@ function timeLog(message, startTime) {
     return Date.now();
 }
 
-// Add this near the top with other constants
-const SYSTEM_PROMPT = `You are a voice agent that is guiding a user through a conversation they are having with someone else. Your responses are delivered to the user**while** they are talking. Your responses should be:
-1. Very breif! 10 words or less.IMPORTANT: Keep you responses VERY brief, MAXIMUM 10 words
-2. Provide critique and suggestions for what the user should say
-3. Add in some divergent/absurdist responses, that still relate to the conversation
-4. Remember that the user will likely interrupt you
-5. Maintain context of the conversation
+// Update synthesizeSpeech to use personality-specific voice
+async function synthesizeSpeech(text, outputPath, voiceId) {
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    const modelId = process.env.ELEVENLABS_MODEL_ID;
 
-Current conversation:
-`;
+    const response = await axios.post(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        text,
+        model_id: modelId,
+    }, {
+        headers: {
+            'xi-api-key': apiKey,
+            'Accept': 'audio/mpeg',
+            'Content-Type': 'application/json'
+        }, 
+        responseType: 'arraybuffer'
+    });
 
-// Add this function to manage conversation history
-function updateConversationHistory(newMessage) {
-    conversationHistory.push(newMessage);
-    
-    // Trim history if it exceeds max length
-    if (conversationHistory.length > MAX_HISTORY_LENGTH * 2) { // *2 because we have both user and system messages
-        timeLog(`Trimming conversation history from ${conversationHistory.length} messages`);
-        conversationHistory.splice(0, 2); // Remove oldest exchange (user message and system response)
-    }
-
-    // Also check total character length
-    let totalLength = conversationHistory.join('\n').length;
-    while (totalLength > MAX_TOTAL_CHARS && conversationHistory.length > 2) {
-        timeLog(`Trimming conversation history from ${totalLength} characters`);
-        conversationHistory.splice(0, 2);
-        totalLength = conversationHistory.join('\n').length;
-    }
+    fs.writeFileSync(outputPath, Buffer.from(response.data));
+    return outputPath;
 }
 
 // Update the transcribeAudio function
@@ -122,82 +108,75 @@ async function queryLlama(prompt) {
     }
 }
 
-// TTS via ElevenLabs
-async function synthesizeSpeech(text, outputPath) {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  const voiceId = process.env.ELEVENLABS_VOICE_ID;
-  const modelId = process.env.ELEVENLABS_MODEL_ID;
-
-  const response = await axios.post(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-    text,
-    model_id: modelId,
-  }, {
-    headers: {
-      'xi-api-key': apiKey,
-      'Accept': 'audio/mpeg',
-      'Content-Type': 'application/json'
-    }, 
-    responseType: 'arraybuffer'
-  });
-
-  fs.writeFileSync(outputPath, Buffer.from(response.data));
-  return outputPath;
-}
-
-// Update the transcribe endpoint
-app.post('/transcribe', async (req, res) => {
-    const startTime = timeLog('Starting transcription request');
-    try {
-        if (!req.body || !req.body.audio) {
-            throw new Error("No audio data received");
-        }
-
-        // Create temporary file in uploads directory
-        const audioBuffer = Buffer.from(req.body.audio, 'base64');
-        const audioFilePath = path.join(UPLOADS_DIR, `audio_${Date.now()}.wav`);
-        fs.writeFileSync(audioFilePath, audioBuffer);
-
-        // Transcribe
-        const transcription = await transcribeAudio(audioFilePath);
-        timeLog(`Transcription result: "${transcription}"`);
-        
-        // Cleanup
-        fs.unlinkSync(audioFilePath);
-        
-        res.json({ transcription });
-    } catch (error) {
-        timeLog('Error in transcription');
-        console.error(error);
-        res.status(500).json({ error: error.message });
+// Add a central personality manager
+const PersonalityManager = {
+    // Tracked personalities
+    activePersonalities: ['advisor', 'critic', 'supporter'],
+    currentPersonalityIndex: 0,
+    
+    // Get the next personality to respond (round-robin style)
+    getNextPersonality() {
+        const personalityId = this.activePersonalities[this.currentPersonalityIndex];
+        this.currentPersonalityIndex = (this.currentPersonalityIndex + 1) % this.activePersonalities.length;
+        return personalities[personalityId];
+    },
+    
+    // Choose a specific personality
+    getPersonality(id) {
+        return personalities[id] || personalities['advisor']; // Default to advisor
+    },
+    
+    // Get all personalities
+    getAllPersonalities() {
+        return this.activePersonalities.map(id => personalities[id]);
     }
-});
+};
 
-// Update the query-llama endpoint to handle empty transcriptions
+// Update the query-llama endpoint to select the personality
 app.post('/query-llama', async (req, res) => {
     const startTime = timeLog('Starting Llama query');
     try {
-        if (!req.body || !req.body.transcription) {
-            timeLog('Empty or missing transcription received');
-            return res.status(400).json({ error: "No transcription received" });
-        }
-
-        if (req.body.transcription.trim() === '') {
-            timeLog('Empty transcription, skipping processing');
+        const { transcription } = req.body;
+        
+        if (!transcription || transcription.trim() === '') {
             return res.json({ response: '' });
         }
+        
+        // Choose the next personality to respond
+        const personality = PersonalityManager.getNextPersonality();
+        const personalityId = personality.id;
+        
+        timeLog(`Selected personality: ${personality.name} (${personalityId})`);
 
-        // Add transcription to conversation history with length management
-        updateConversationHistory(req.body.transcription);
+        // Add to personality's pending transcriptions and check if it's already processing
+        const isAlreadyProcessing = personality.addPendingTranscription(transcription);
         
-        // Create full prompt with system prompt and conversation
-        const fullPrompt = SYSTEM_PROMPT + conversationHistory.join("\n");
-        const response = await queryLlama(fullPrompt);
+        if (isAlreadyProcessing) {
+            timeLog('Added to processing queue for ' + personalityId);
+            return res.json({ queued: true, personalityId });
+        }
         
-        // Add system's response to history
-        updateConversationHistory(response);
+        // Start processing
+        personality.isProcessing = true;
         
-        timeLog('Llama query complete', startTime);
-        res.json({ response });
+        try {
+            const fullTranscription = personality.getAndClearPendingTranscriptions();
+            personality.updateHistory(fullTranscription);
+            const fullPrompt = personality.getFullPrompt();
+            
+            const response = await queryLlama(fullPrompt);
+            personality.updateHistory(response);
+            
+            timeLog('Llama query complete', startTime);
+            res.json({ 
+                response, 
+                personalityId,
+                position: personality.position, 
+                voiceId: personality.voiceId
+            });
+        } finally {
+            personality.isProcessing = false;
+        }
     } catch (error) {
         timeLog('Error in Llama query');
         console.error(error);
@@ -215,26 +194,31 @@ app.get('/last-audio', (req, res) => {
   }
 });
 
-// Update the process-text endpoint
+// Update process-text endpoint with more logging
 app.post('/process-text', async (req, res) => {
     const startTime = timeLog('Starting text-only processing');
     try {
-        if (!req.body || !req.body.text) {
+        const { text, personalityId = 'advisor' } = req.body;
+        const personality = personalities[personalityId];
+
+        if (!text) {
             throw new Error("No text received");
         }
 
-        // Generate speech from text
-        const audioFilePath = path.join(RESPONSES_DIR, `response_${Date.now()}.mp3`);
-        await synthesizeSpeech(req.body.text, audioFilePath);
+        if (!personality) {
+            throw new Error(`Unknown personality: ${personalityId}`);
+        }
+
+        timeLog(`Using personality: ${personality.name} with voice ID: ${personality.voiceId}`);
+
+        const audioFilePath = path.join(RESPONSES_DIR, `response_${personalityId}_${Date.now()}.mp3`);
+        await synthesizeSpeech(text, audioFilePath, personality.voiceId);
         
-        // Update last generated audio path
         lastGeneratedAudio = audioFilePath;
         
-        // Send audio file
         res.set('Content-Type', 'audio/mpeg');
         res.send(fs.readFileSync(audioFilePath));
         
-        // Clean up old files (keep last 5 responses)
         cleanupOldResponses();
     } catch (error) {
         timeLog('Error in text processing');
@@ -262,6 +246,34 @@ function cleanupOldResponses() {
         console.error(error);
     }
 }
+
+// Add back the transcribe endpoint
+app.post('/transcribe', async (req, res) => {
+    const startTime = timeLog('Starting transcription request');
+    try {
+        if (!req.body || !req.body.audio) {
+            throw new Error("No audio data received");
+        }
+
+        // Create temporary file in uploads directory
+        const audioBuffer = Buffer.from(req.body.audio, 'base64');
+        const audioFilePath = path.join(UPLOADS_DIR, `audio_${Date.now()}.wav`);
+        fs.writeFileSync(audioFilePath, audioBuffer);
+
+        // Transcribe
+        const transcription = await transcribeAudio(audioFilePath);
+        timeLog(`Transcription result: "${transcription}"`);
+        
+        // Cleanup
+        fs.unlinkSync(audioFilePath);
+        
+        res.json({ transcription });
+    } catch (error) {
+        timeLog('Error in transcription');
+        console.error(error);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // Initialize directories when the server starts
 app.listen(port, () => {

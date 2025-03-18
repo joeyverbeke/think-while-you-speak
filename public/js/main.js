@@ -6,7 +6,8 @@ function timeLog(message, startTime) {
 }
 
 let vadInstance;
-let audioQueue = []; // Queue of audio blobs to play
+let audioQueue = []; // Queue of audio data objects
+let currentAudioData = null; // Track current audio data including position
 let currentAudioElement = null;
 let isCurrentlySpeaking = false;
 let currentAudioBlob = null; // Keep track of the current audio blob
@@ -14,43 +15,119 @@ let currentPlaybackTime = 0; // Track current playback position
 let isProcessing = false; // Flag to track if we're processing a response
 let pendingTranscriptions = []; // Store transcriptions while processing
 let processingPromise = null; // Store the current processing promise
+let audioContext;
+let pannerNodes = new Map(); // Store panner nodes for each voice
 
-async function playAudio(blob, resumeTime = 0) {
-    const startTime = timeLog('Starting audio playback...');
+function initializeAudioContext() {
+    try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Set up listener position only
+        const listener = audioContext.listener;
+        listener.positionX.value = 0;
+        listener.positionY.value = 0;
+        listener.positionZ.value = 0;
+        listener.forwardX.value = 0;
+        listener.forwardY.value = 0;
+        listener.forwardZ.value = -1;
+        listener.upX.value = 0;
+        listener.upY.value = 1;
+        listener.upZ.value = 0;
+        
+        timeLog('Audio context initialized');
+    } catch (error) {
+        console.error('Web Audio API not supported:', error);
+    }
+}
+
+// Add function to get or create panner for a personality
+function getPersonalityPanner(personalityId, position) {
+    if (!pannerNodes.has(personalityId)) {
+        const panner = audioContext.createPanner();
+        panner.panningModel = 'HRTF';
+        panner.distanceModel = 'inverse';
+        
+        // Set position from backend
+        panner.positionX.value = position.x;
+        panner.positionY.value = position.y;
+        panner.positionZ.value = position.z;
+        
+        panner.connect(audioContext.destination);
+        pannerNodes.set(personalityId, panner);
+        timeLog(`Created new panner for ${personalityId} at position (${position.x}, ${position.y}, ${position.z})`);
+    }
+    return pannerNodes.get(personalityId);
+}
+
+async function playAudio(data) {
+    if (!data || !data.blob) {
+        console.error('Invalid audio data received');
+        return;
+    }
+
+    const { blob, voiceId: personalityId, position, timestamp } = data;
+    if (!position) {
+        console.error('No position data for personality:', personalityId);
+        return;
+    }
+
+    const startTime = timeLog(`Starting audio playback for personality ${personalityId}...`);
+    
+    if (!audioContext) {
+        initializeAudioContext();
+    }
+    if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+    }
+
+    // Store current audio data with timestamp
+    currentAudioData = {
+        ...data,
+        timestamp: timestamp || Date.now()
+    };
+
+    // Get or create panner for this personality
+    const panner = getPersonalityPanner(personalityId, position);
+
     if (currentAudioElement) {
-        timeLog('Stopping previous audio...');
-        currentPlaybackTime = currentAudioElement.currentTime; // Save position before stopping
-        currentAudioElement.pause();
+        try {
+            currentAudioElement.stop();
+        } catch (error) {
+            console.error('Error stopping previous audio:', error);
+        }
         currentAudioElement = null;
     }
 
-    // If it's a new audio blob, reset playback time
-    if (currentAudioBlob !== blob) {
-        timeLog('New audio file detected, starting from beginning');
-        currentAudioBlob = blob;
+    // Reset playback time for new audio
+    if (currentAudioData !== data) {
         currentPlaybackTime = 0;
     }
 
-    const url = URL.createObjectURL(blob);
-    currentAudioElement = new Audio(url);
-    
-    // Set up ended handler to play next audio if still speaking
-    currentAudioElement.onended = () => {
-        timeLog('Audio playback ended');
-        if (isCurrentlySpeaking && audioQueue.length > 0) {
-            timeLog('Playing next queued audio');
-            currentPlaybackTime = 0; // Reset for new audio
-            playAudio(audioQueue.shift());
-        }
-    };
+    try {
+        const arrayBuffer = await blob.arrayBuffer();
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(panner);
+        
+        source.onended = () => {
+            timeLog('Audio playback ended');
+            if (isCurrentlySpeaking && audioQueue.length > 0) {
+                timeLog('Playing next queued audio');
+                currentPlaybackTime = 0;
+                playAudio(audioQueue.shift());
+            }
+        };
 
-    if (isCurrentlySpeaking) {
-        if (currentPlaybackTime > 0) {
-            timeLog(`Resuming audio from ${currentPlaybackTime.toFixed(2)}s`);
-            currentAudioElement.currentTime = currentPlaybackTime;
+        if (isCurrentlySpeaking) {
+            source.start(0, currentPlaybackTime);
+            timeLog('Audio playback started', startTime);
         }
-        await currentAudioElement.play();
-        timeLog('Audio playback started', startTime);
+
+        currentAudioElement = source;
+    } catch (error) {
+        console.error(`Error playing spatial audio for personality ${personalityId}:`, error);
     }
 }
 
@@ -69,25 +146,17 @@ async function initializeVAD() {
     const startTime = timeLog('Initializing VAD...');
     vadInstance = await vad.MicVAD.new({
         onSpeechStart: async () => {
-            const startTime = timeLog('🎤 Speech detected');
+            timeLog('🎤 Speech detected');
             isCurrentlySpeaking = true;
 
-            // If we have queued audio, start playing it
+            // If there's queued audio, always prefer that over current audio
             if (audioQueue.length > 0) {
                 timeLog('Playing new queued audio');
-                currentPlaybackTime = 0; // Reset for new audio
+                currentAudioData = null;  // Clear current audio
                 playAudio(audioQueue.shift());
-            } else if (currentAudioBlob) {
-                // Resume current audio if available
+            } else if (currentAudioData) {
                 timeLog('Resuming current audio');
-                playAudio(currentAudioBlob);
-            } else {
-                // Try to get the last generated audio
-                const lastAudio = await fetchLastAudio();
-                if (lastAudio) {
-                    timeLog('Playing last available audio');
-                    playAudio(lastAudio);
-                }
+                playAudio(currentAudioData);
             }
         },
         onSpeechEnd: async (audio) => {
@@ -95,11 +164,15 @@ async function initializeVAD() {
             isCurrentlySpeaking = false;
 
             // Save current position before stopping
-            if (currentAudioElement && !currentAudioElement.ended) {
-                currentPlaybackTime = currentAudioElement.currentTime;
-                timeLog(`Saving playback position: ${currentPlaybackTime.toFixed(2)}s`);
-                currentAudioElement.pause();
-                currentAudioElement = null;
+            if (currentAudioElement) {
+                try {
+                    // AudioBufferSourceNode doesn't have currentTime, we need to track it differently
+                    timeLog(`Saving playback position: ${currentPlaybackTime.toFixed(2)}s`);
+                    currentAudioElement.stop();
+                    currentAudioElement = null;
+                } catch (error) {
+                    console.error('Error stopping audio:', error);
+                }
             }
 
             try {
@@ -155,32 +228,39 @@ async function initializeVAD() {
 async function processUserSpeech(transcription) {
     const startTime = timeLog('Starting end-to-end processing');
     try {
-        // Send to Llama
+        // Send to backend without specifying personality
         timeLog('Sending to Llama...');
         const llamaResponse = await fetch('/query-llama', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ 
-                transcription: transcription 
-            })
+            body: JSON.stringify({ transcription })
         });
 
         if (!llamaResponse.ok) {
             throw new Error(`Llama query failed with ${llamaResponse.status}`);
         }
 
-        const { response: llamaResult } = await llamaResponse.json();
+        const responseData = await llamaResponse.json();
         
-        // Generate speech
-        timeLog('Generating speech...');
+        if (responseData.queued) {
+            timeLog(`Transcription queued for later processing`);
+            return true;
+        }
+
+        const { response: llamaResult, personalityId, position } = responseData;
+        
+        timeLog(`Generating speech for ${personalityId}...`);
         const response = await fetch('/process-text', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ text: llamaResult })
+            body: JSON.stringify({ 
+                text: llamaResult,
+                personalityId
+            })
         });
 
         if (!response.ok) {
@@ -188,7 +268,13 @@ async function processUserSpeech(transcription) {
         }
 
         const audioBlob = await response.blob();
-        audioQueue.push(audioBlob);
+        // Add timestamp when adding to queue
+        audioQueue.push({ 
+            blob: audioBlob, 
+            voiceId: personalityId,
+            position: position,
+            timestamp: Date.now()
+        });
         timeLog('Full end-to-end processing complete', startTime);
         
         return true;
@@ -200,7 +286,13 @@ async function processUserSpeech(transcription) {
 
 // Initialize event listeners when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('startBtn').onclick = initializeVAD;
+    document.getElementById('startBtn').onclick = async () => {
+        // Initialize audio context on user gesture
+        if (!audioContext) {
+            initializeAudioContext();
+        }
+        await initializeVAD();
+    };
     
     document.getElementById('stopBtn').onclick = () => {
         if (vadInstance) {

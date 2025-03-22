@@ -4,15 +4,45 @@ const fs = require('fs');
 const axios = require('axios');
 const { exec } = require('child_process');
 const path = require('path');
+const os = require('os');
 require('dotenv').config();
 const { personalities } = require('./personalities');
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
-// Add these middleware configurations before your routes
+// Add CORS support for cross-origin requests
 app.use(express.json({limit: '50mb'}));
 app.use(express.static('public'));
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  next();
+});
+
+// Add a route to provide server config
+app.get('/server-config', (req, res) => {
+  res.json({
+    // Only expose safe, non-private configuration
+    audioEnabled: true,
+    defaultPersonality: 'advisor'
+  });
+});
+
+// Get all available IP addresses (for server console only)
+function getIpAddresses() {
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+  
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        addresses.push(iface.address);
+      }
+    }
+  }
+  return addresses;
+}
 
 const FormData = require('form-data');
 
@@ -290,8 +320,37 @@ app.post('/transcribe', async (req, res) => {
     }
 });
 
-// Initialize directories when the server starts
-app.listen(port, () => {
-    initializeAudioDirectories();
-    timeLog(`Backend running at http://localhost:${port}`);
+// Add this new function to get safe server URL (no Tailscale IPs exposed)
+function getSafeServerUrls() {
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+  
+  // Include localhost - this is safe to show
+  addresses.push(`http://localhost:${port}`);
+  
+  // For other addresses, we'll obfuscate them in logs
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        // Create a safe URL that doesn't reveal full IP
+        const parts = iface.address.split('.');
+        const safeIP = `${parts[0]}.${parts[1]}.*.*`;
+        addresses.push(`http://${safeIP}:${port}`);
+      }
+    }
+  }
+  
+  return addresses;
+}
+
+// Listen on all interfaces
+app.listen(port, '0.0.0.0', () => {
+  initializeAudioDirectories();
+  const safeUrls = getSafeServerUrls();
+  
+  timeLog('Server started successfully');
+  safeUrls.forEach(url => {
+    timeLog(`Available at: ${url}`);
+  });
+  timeLog('For remote access, configure the client with your Tailscale IP:port');
 });

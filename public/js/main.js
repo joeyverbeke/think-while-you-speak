@@ -19,25 +19,90 @@ let audioContext;
 let pannerNodes = new Map(); // Store panner nodes for each voice
 let isFirstSpeech = true;
 
-function initializeAudioContext() {
+// Add Raspberry Pi detection
+const isRaspberryPi = navigator.userAgent.toLowerCase().includes('linux armv');
+
+// Update VAD initialization
+async function initializeVAD() {
+    const startTime = timeLog('Initializing VAD...');
+    
     try {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // Configure for Raspberry Pi
+        const vadConfig = {
+            model: 'legacy',
+            positiveSpeechThreshold: isRaspberryPi ? 0.6 : 0.5,
+            negativeSpeechThreshold: isRaspberryPi ? 0.45 : 0.35,
+            minSpeechFrames: isRaspberryPi ? 5 : 3,
+            preSpeechPadFrames: 5,
+            // Specific audio constraints for Raspberry Pi
+            audioConstraints: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                channelCount: 1,
+                sampleRate: 16000
+            }
+        };
+
+        // Log device info
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        timeLog('Available audio inputs:', audioInputs.map(d => d.label));
+
+        // Initialize VAD with logging
+        timeLog('Creating VAD with config:', vadConfig);
+        vadInstance = await vad.MicVAD.new(vadConfig);
+
+        // Add error handlers
+        vadInstance.onerror = (error) => {
+            console.error('VAD error:', error);
+            timeLog('VAD error occurred');
+        };
+
+        // Start VAD with explicit error handling
+        await vadInstance.start().catch(error => {
+            console.error('Error starting VAD:', error);
+            throw error;
+        });
+
+        timeLog('VAD initialization complete', startTime);
+    } catch (error) {
+        console.error("Error initializing VAD:", error);
+        console.error("Detailed error:", error.message);
+        if (error.stack) console.error("Stack trace:", error.stack);
+        throw error;
+    }
+}
+
+// Update audio context initialization
+async function initializeAudioContext() {
+    try {
+        if (!audioContext) {
+            const contextOptions = {
+                // Lower sample rate for better performance on Pi
+                sampleRate: isRaspberryPi ? 16000 : 44100,
+                latencyHint: isRaspberryPi ? 'playback' : 'interactive'
+            };
+            audioContext = new (window.AudioContext || window.webkitAudioContext)(contextOptions);
+        }
         
-        // Set up listener position only
-        const listener = audioContext.listener;
-        listener.positionX.value = 0;
-        listener.positionY.value = 0;
-        listener.positionZ.value = 0;
-        listener.forwardX.value = 0;
-        listener.forwardY.value = 0;
-        listener.forwardZ.value = -1;
-        listener.upX.value = 0;
-        listener.upY.value = 1;
-        listener.upZ.value = 0;
-        
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
+
+        // Test audio system
+        const testOsc = audioContext.createOscillator();
+        const testGain = audioContext.createGain();
+        testGain.gain.value = 0; // Silent test
+        testOsc.connect(testGain);
+        testGain.connect(audioContext.destination);
+        testOsc.start();
+        testOsc.stop(audioContext.currentTime + 0.1);
+
         timeLog('Audio context initialized');
     } catch (error) {
-        console.error('Web Audio API not supported:', error);
+        console.error('Audio initialization error:', error);
+        throw error;
     }
 }
 
@@ -143,111 +208,6 @@ async function fetchLastAudio() {
     return null;
 }
 
-async function initializeVAD() {
-    const startTime = timeLog('Initializing VAD...');
-    vadInstance = await vad.MicVAD.new({
-
-        //TODO: Adjust thresholds and model
-        positiveSpeechThreshold: 0.5,
-        negativeSpeechThreshold: 0.35,
-        model: "v5",
-
-        onSpeechStart: async () => {
-            timeLog('🎤 Speech detected');
-            isCurrentlySpeaking = true;
-
-            // If this is the first speech, play initial response
-            if (isFirstSpeech) {
-                timeLog('Playing initial response');
-                const initialResponse = await fetch('/last-audio');
-                if (initialResponse.ok) {
-                    const blob = await initialResponse.blob();
-                    // Use advisor's position for initial response
-                    const advisorPosition = { x: 0, y: 0, z: 1 };
-                    playAudio({
-                        blob,
-                        voiceId: 'advisor',
-                        position: advisorPosition
-                    });
-                }
-                isFirstSpeech = false;
-            }
-            // If there's queued audio, always prefer that over current audio
-            else if (audioQueue.length > 0) {
-                timeLog('Playing new queued audio');
-                currentAudioData = null;  // Clear current audio
-                playAudio(audioQueue.shift());
-            } else if (currentAudioData) {
-                timeLog('Resuming current audio');
-                playAudio(currentAudioData);
-            }
-        },
-        onSpeechEnd: async (audio) => {
-            const startTime = timeLog('🎤 Speech ended, processing...');
-            isCurrentlySpeaking = false;
-
-            // Save current position before stopping
-            if (currentAudioElement) {
-                try {
-                    // AudioBufferSourceNode doesn't have currentTime, we need to track it differently
-                    timeLog(`Saving playback position: ${currentPlaybackTime.toFixed(2)}s`);
-                    currentAudioElement.stop();
-                    currentAudioElement = null;
-                } catch (error) {
-                    console.error('Error stopping audio:', error);
-                }
-            }
-
-            try {
-                // Encode and transcribe the audio
-                const encodeStart = Date.now();
-                const wavBuffer = vad.utils.encodeWAV(audio);
-                const base64Audio = vad.utils.arrayBufferToBase64(wavBuffer);
-                
-                const response = await fetch('/transcribe', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ audio: base64Audio })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Transcription failed with ${response.status}`);
-                }
-
-                const { transcription } = await response.json();
-                timeLog(`Transcribed: "${transcription}"`, encodeStart);
-
-                // Add to pending transcriptions
-                pendingTranscriptions.push(transcription);
-
-                // If we're not currently processing, start a new processing cycle
-                if (!isProcessing) {
-                    isProcessing = true;
-                    
-                    while (pendingTranscriptions.length > 0) {
-                        // Combine all pending transcriptions
-                        const fullTranscription = pendingTranscriptions.join(" ");
-                        pendingTranscriptions = []; // Clear pending transcriptions
-                        
-                        timeLog(`Processing combined transcription: "${fullTranscription}"`);
-                        await processUserSpeech(fullTranscription);
-                    }
-                    
-                    isProcessing = false;
-                }
-
-                timeLog('Speech handling complete', startTime);
-            } catch (error) {
-                console.error("Error processing speech:", error);
-            }
-        }
-    });
-    vadInstance.start();
-    timeLog('VAD initialization complete', startTime);
-}
-
 async function processUserSpeech(transcription) {
     const startTime = timeLog('Starting end-to-end processing');
     try {
@@ -307,14 +267,44 @@ async function processUserSpeech(transcription) {
     }
 }
 
-// Initialize event listeners when the DOM is loaded
+// Add more robust error handling to the start button
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('startBtn').onclick = async () => {
-        // Initialize audio context on user gesture
-        if (!audioContext) {
-            initializeAudioContext();
+        try {
+            // Request microphone access with explicit error handling
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    channelCount: 1,
+                    sampleRate: 16000
+                }
+            });
+            
+            timeLog('Microphone access granted');
+            
+            // Test the audio stream
+            const track = stream.getAudioTracks()[0];
+            const capabilities = track.getCapabilities();
+            timeLog('Audio capabilities:', capabilities);
+            
+            // Initialize audio context
+            await initializeAudioContext();
+            
+            // Initialize VAD
+            await initializeVAD();
+            
+            // Update UI
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            
+        } catch (error) {
+            console.error('Error starting application:', error);
+            timeLog('Failed to start: ' + error.message);
+            // Show error to user
+            alert('Failed to start: ' + error.message);
         }
-        await initializeVAD();
     };
     
     document.getElementById('stopBtn').onclick = () => {

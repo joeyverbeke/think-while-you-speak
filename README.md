@@ -80,3 +80,34 @@ project_root/
 - Ollama for running the Llama model
 - OpenAI's Whisper API for transcription
 - ElevenLabs API for text-to-speech
+
+## Raspberry Pi Setup
+
+1. Install required packages:
+    ```bash
+    sudo apt-get update
+    sudo apt-get install alsa-utils libasound2-dev
+    ```
+
+2. Add your user to the audio group:
+    ```bash
+    sudo usermod -a -G audio $USER
+    ```
+
+3. Check audio configuration:
+    ```bash
+    # List audio devices
+    arecord -l
+    aplay -l
+    ```
+
+4. Run the compatibility check:
+    ```bash
+    chmod +x check-pi-requirements.sh
+    ./check-pi-requirements.sh
+    ```
+
+5. If using Chromium, enable the following flags:
+    - Navigate to chrome://flags
+    - Enable "Override software rendering list"
+    - Enable "WebRTC PipeWire support"

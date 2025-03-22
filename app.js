@@ -6,6 +6,7 @@ const { exec } = require('child_process');
 const path = require('path');
 require('dotenv').config();
 const { personalities } = require('./personalities');
+const os = require('os');
 
 const app = express();
 const port = 3000;
@@ -28,12 +29,37 @@ const INITIAL_DIR = path.join(AUDIO_DIR, 'initial');
 //Single or multiple personalities
 const PERSONALITY_MODE = process.env.PERSONALITY_MODE || 'single';
 
+// Add this function to get all available IP addresses
+function getIpAddresses() {
+    const interfaces = os.networkInterfaces();
+    const addresses = [];
+    
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            // Skip internal and non-IPv4 addresses
+            if (iface.family === 'IPv4' && !iface.internal) {
+                addresses.push(iface.address);
+            }
+        }
+    }
+    return addresses;
+}
+
 // Initialize the audio directories
 function initializeAudioDirectories() {
     [AUDIO_DIR, UPLOADS_DIR, RESPONSES_DIR, INITIAL_DIR].forEach(dir => {
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-            timeLog(`Created directory: ${dir}`);
+        try {
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+                timeLog(`Created directory: ${dir}`);
+            }
+            // Test write permissions
+            const testFile = path.join(dir, '.test');
+            fs.writeFileSync(testFile, '');
+            fs.unlinkSync(testFile);
+        } catch (error) {
+            console.error(`Error accessing directory ${dir}:`, error);
+            process.exit(1);
         }
     });
 }
@@ -290,10 +316,14 @@ app.post('/transcribe', async (req, res) => {
     }
 });
 
-// Initialize directories when the server starts
-app.listen(port, () => {
+// Update the server initialization
+app.listen(port, '0.0.0.0', () => {  // Listen on all interfaces
     initializeAudioDirectories();
+    const addresses = getIpAddresses();
     timeLog(`Backend running at http://localhost:${port}`);
+    addresses.forEach(ip => {
+        timeLog(`Also available at http://${ip}:${port}`);
+    });
 });
 
 //create pi-integration branch

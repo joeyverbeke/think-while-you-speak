@@ -41,6 +41,73 @@ async function initializeVAD() {
                 autoGainControl: true,
                 channelCount: 1,
                 sampleRate: 16000
+            },
+            // Add the event handlers in the initial config
+            onSpeechStart: async () => {
+                timeLog('🎤 Speech detected');
+                isCurrentlySpeaking = true;
+
+                if (isFirstSpeech) {
+                    timeLog('Playing initial response');
+                    const initialResponse = await fetch('/last-audio');
+                    if (initialResponse.ok) {
+                        const blob = await initialResponse.blob();
+                        playAudio({
+                            blob,
+                            voiceId: 'advisor',
+                            position: { x: 0, y: 0, z: 1 }
+                        });
+                    }
+                    isFirstSpeech = false;
+                } else if (audioQueue.length > 0) {
+                    timeLog('Playing new queued audio');
+                    currentAudioData = null;
+                    playAudio(audioQueue.shift());
+                } else if (currentAudioData) {
+                    timeLog('Resuming current audio');
+                    playAudio(currentAudioData);
+                }
+            },
+            onSpeechEnd: async (audio) => {
+                timeLog('🎤 Speech ended, processing...');
+                isCurrentlySpeaking = false;
+
+                if (currentAudioElement) {
+                    try {
+                        currentAudioElement.stop();
+                        currentAudioElement = null;
+                    } catch (error) {
+                        console.error('Error stopping audio:', error);
+                    }
+                }
+
+                try {
+                    const wavBuffer = vad.utils.encodeWAV(audio);
+                    const base64Audio = vad.utils.arrayBufferToBase64(wavBuffer);
+                    
+                    const response = await fetch('/transcribe', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ audio: base64Audio })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Transcription failed with ${response.status}`);
+                    }
+
+                    const { transcription } = await response.json();
+                    timeLog(`Transcribed: "${transcription}"`);
+
+                    if (!isProcessing && transcription.trim()) {
+                        isProcessing = true;
+                        await processUserSpeech(transcription);
+                        isProcessing = false;
+                    }
+                } catch (error) {
+                    console.error("Error processing speech:", error);
+                }
             }
         };
 
@@ -51,20 +118,13 @@ async function initializeVAD() {
 
         // Initialize VAD with logging
         timeLog('Creating VAD with config:', vadConfig);
+        
+        // Create VAD instance
         vadInstance = await vad.MicVAD.new(vadConfig);
-
-        // Add error handlers
-        vadInstance.onerror = (error) => {
-            console.error('VAD error:', error);
-            timeLog('VAD error occurred');
-        };
-
-        // Start VAD with explicit error handling
-        await vadInstance.start().catch(error => {
-            console.error('Error starting VAD:', error);
-            throw error;
-        });
-
+        
+        // Start VAD
+        await vadInstance.start();
+        
         timeLog('VAD initialization complete', startTime);
     } catch (error) {
         console.error("Error initializing VAD:", error);

@@ -342,5 +342,3 @@ httpsServer.listen(port, '0.0.0.0', () => {
         });
     }
 });
-
-//create mobile-integration branch

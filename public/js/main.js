@@ -12,6 +12,7 @@ let audioContext;
 let pannerNodes = new Map(); // Store panner nodes for each voice
 let isFirstSpeech = true;
 let hasAudioBeenInitialized = false; // Flag to track iOS audio initialization
+let keepAliveAudio;
 
 // DOM elements
 let statusEl;
@@ -51,17 +52,42 @@ function initializeIOSAudio() {
     if (hasAudioBeenInitialized) return Promise.resolve();
     
     return new Promise((resolve) => {
-        // Create a silent audio context that needs to be started on user gesture
-        const tempContext = new (window.AudioContext || window.webkitAudioContext)();
-        const silentSource = tempContext.createOscillator();
-        silentSource.frequency.value = 0; // Silent
-        silentSource.connect(tempContext.destination);
-        silentSource.start();
-        silentSource.stop(tempContext.currentTime + 0.001);
+        // Get the keep-alive audio element
+        keepAliveAudio = document.getElementById('keepAliveAudio');
+        
+        // Configure audio session for background playback
+        if (keepAliveAudio) {
+            keepAliveAudio.volume = 0.001; // Nearly silent
+            keepAliveAudio.play().catch(console.error);
+        }
+        
+        // Create audio context with specific options for iOS
+        const audioContextOptions = {
+            // Enable low latency mode
+            latencyHint: 'interactive',
+            // Use sample rate that works well on iOS
+            sampleRate: 44100
+        };
+        
+        const tempContext = new (window.AudioContext || window.webkitAudioContext)(audioContextOptions);
+        
+        // Create and play a silent audio buffer to keep session alive
+        const silentBuffer = tempContext.createBuffer(1, 1024, tempContext.sampleRate);
+        const source = tempContext.createBufferSource();
+        source.buffer = silentBuffer;
+        source.connect(tempContext.destination);
+        source.start();
+        
+        // Enable audio session
+        if (navigator.mediaSession) {
+            navigator.mediaSession.setActionHandler('play', () => {});
+            navigator.mediaSession.setActionHandler('pause', () => {});
+            navigator.mediaSession.playbackState = "playing";
+        }
         
         // On iOS, this gesture unlocks the audio
         tempContext.resume().then(() => {
-            timeLog('iOS audio initialized');
+            timeLog('iOS audio initialized for background playback');
             hasAudioBeenInitialized = true;
             resolve();
         });
@@ -113,7 +139,12 @@ function createDeviceSelectors(audioDevices) {
 async function initializeAudioContext() {
     try {
         if (!audioContext) {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            // Use the same options as in initializeIOSAudio
+            const audioContextOptions = {
+                latencyHint: 'interactive',
+                sampleRate: 44100
+            };
+            audioContext = new (window.AudioContext || window.webkitAudioContext)(audioContextOptions);
         }
         
         if (audioContext.state === 'suspended') {
@@ -486,6 +517,21 @@ async function processUserSpeech(transcription) {
     }
 }
 
+// Add audio session interruption handling
+function handleAudioInterruption() {
+    if (navigator.mediaSession) {
+        navigator.mediaSession.setActionHandler('play', async () => {
+            timeLog('Resuming audio after interruption');
+            if (keepAliveAudio && keepAliveAudio.paused) {
+                await keepAliveAudio.play();
+            }
+            if (audioContext && audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+        });
+    }
+}
+
 // Initialize event listeners when the DOM is loaded
 document.addEventListener('DOMContentLoaded', async () => {
     statusEl = document.getElementById('status');
@@ -587,6 +633,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             stopBtn.disabled = true;
         }
     };
+    
+    // Initialize audio interruption handling
+    handleAudioInterruption();
 });
 
 // Prevent iOS from going to sleep
@@ -614,4 +663,18 @@ function resetInactivityTimer() {
 // Reset timer on any user interaction
 ['touchstart', 'mousedown', 'keydown'].forEach(event => {
     document.addEventListener(event, resetInactivityTimer);
+});
+
+// Add visibility change handler
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        // Page is hidden (locked/background)
+        timeLog('Page hidden - ensuring audio continues');
+        if (keepAliveAudio && keepAliveAudio.paused) {
+            keepAliveAudio.play().catch(console.error);
+        }
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume().catch(console.error);
+        }
+    }
 }); 

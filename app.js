@@ -26,8 +26,8 @@ const UPLOADS_DIR = path.join(AUDIO_DIR, 'uploads');
 const RESPONSES_DIR = path.join(AUDIO_DIR, 'responses');
 const INITIAL_DIR = path.join(AUDIO_DIR, 'initial');
 
-//Single or multiple personalities
-const PERSONALITY_MODE = process.env.PERSONALITY_MODE || 'single';
+//Debug mode
+const DEBUG_MODE = process.env.DEBUG_MODE || false;
 
 // Add this function to get all available IP addresses
 function getIpAddresses() {
@@ -252,8 +252,24 @@ app.post('/process-text', async (req, res) => {
 
         timeLog(`Using personality: ${personality.name} with voice ID: ${personality.voiceId}`);
 
-        const audioFilePath = path.join(RESPONSES_DIR, `response_${personalityId}_${Date.now()}.wav`);
-        await synthesizeSpeech(text, audioFilePath, personality.voiceId);
+        let audioFilePath;
+        
+        if (DEBUG_MODE) {
+            // In debug mode, cycle through existing files in responses dir
+            const existingFiles = fs.readdirSync(RESPONSES_DIR);
+            if (existingFiles.length > 0) {
+                // Get index from timestamp to cycle through files
+                const fileIndex = Math.floor(Date.now() / 1000) % existingFiles.length;
+                audioFilePath = path.join(RESPONSES_DIR, existingFiles[fileIndex]);
+                timeLog(`DEBUG MODE: Using audio file ${fileIndex + 1}/${existingFiles.length}: ${audioFilePath}`);
+            } else {
+                throw new Error("No existing audio files found in debug mode");
+            }
+        } else {
+            // Normal mode - generate new speech
+            audioFilePath = path.join(RESPONSES_DIR, `response_${personalityId}_${Date.now()}.wav`);
+            await synthesizeSpeech(text, audioFilePath, personality.voiceId);
+        }
         
         lastGeneratedAudio = audioFilePath;
         

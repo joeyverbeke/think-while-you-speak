@@ -144,7 +144,7 @@ async function initializeAudioContext() {
     try {
         if (!audioContext) {
             const contextOptions = {
-                sampleRate: 16000,           // Use lower sample rate
+                sampleRate: 441000,           // Use lower sample rate
                 latencyHint: 'interactive',
                 bufferSize: 512              // Use smaller buffer for lower latency
             };
@@ -347,7 +347,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     noiseSuppression: true,
                     autoGainControl: true,
                     channelCount: 1,
-                    sampleRate: 16000
+                    sampleRate: 441000
                 }
             });
             

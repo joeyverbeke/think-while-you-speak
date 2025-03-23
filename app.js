@@ -86,7 +86,7 @@ async function synthesizeSpeech(text, outputPath, voiceId) {
     }, {
         headers: {
             'xi-api-key': apiKey,
-            'Accept': 'audio/mpeg',
+            'Accept': 'audio/wav',
             'Content-Type': 'application/json'
         }, 
         responseType: 'arraybuffer'
@@ -228,7 +228,7 @@ app.post('/query-llama', async (req, res) => {
 // Serve last generated audio for immediate playback
 app.get('/last-audio', (req, res) => {
   if (fs.existsSync(lastGeneratedAudio)) {
-    res.set('Content-Type', 'audio/mpeg');
+    res.set('Content-Type', 'audio/wav');
     res.send(fs.readFileSync(lastGeneratedAudio));
   } else {
     res.status(404).send("No audio available yet.");
@@ -252,12 +252,12 @@ app.post('/process-text', async (req, res) => {
 
         timeLog(`Using personality: ${personality.name} with voice ID: ${personality.voiceId}`);
 
-        const audioFilePath = path.join(RESPONSES_DIR, `response_${personalityId}_${Date.now()}.mp3`);
+        const audioFilePath = path.join(RESPONSES_DIR, `response_${personalityId}_${Date.now()}.wav`);
         await synthesizeSpeech(text, audioFilePath, personality.voiceId);
         
         lastGeneratedAudio = audioFilePath;
         
-        res.set('Content-Type', 'audio/mpeg');
+        res.set('Content-Type', 'audio/wav');
         res.send(fs.readFileSync(audioFilePath));
         
         cleanupOldResponses();

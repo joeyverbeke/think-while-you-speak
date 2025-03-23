@@ -200,10 +200,6 @@ async function playAudio(audioData) {
             await initializeAudioContext();
         }
 
-        // Create a gain node for volume control
-        //const gainNode = audioContext.createGain();
-        //gainNode.gain.value = 0.5; // Set volume to 50%
-
         // Get or create the panner for this voice
         const panner = getPersonalityPanner(audioData.voiceId, audioData.position);
         
@@ -214,9 +210,8 @@ async function playAudio(audioData) {
         // Create media element source
         const source = audioContext.createMediaElementSource(audio);
         
-        // Connect nodes: source -> gain -> panner -> destination
-        source.connect(gainNode);
-        gainNode.connect(panner);
+        // Connect nodes: source -> panner -> destination
+        source.connect(panner);
         
         // Store current audio element
         currentAudioElement = audio;

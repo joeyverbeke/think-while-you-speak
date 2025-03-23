@@ -65,7 +65,7 @@ function initializeAudioDirectories() {
 }
 
 // Update lastGeneratedAudio path
-let lastGeneratedAudio = path.join(INITIAL_DIR, 'initial_response.mp3');
+let lastGeneratedAudio = path.join(INITIAL_DIR, 'initial_response.wav');
 
 // Add this utility function at the top of your file
 function timeLog(message, startTime) {

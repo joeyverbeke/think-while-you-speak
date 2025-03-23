@@ -18,6 +18,7 @@ let processingPromise = null; // Store the current processing promise
 let audioContext;
 let pannerNodes = new Map(); // Store panner nodes for each voice
 let isFirstSpeech = true;
+let isAudioTransitioning = false;
 
 // Add Raspberry Pi detection
 const isRaspberryPi = navigator.userAgent.toLowerCase().includes('linux armv');
@@ -193,22 +194,33 @@ function getPersonalityPanner(personalityId, position) {
 // Update the playAudio function to include gain control
 async function playAudio(audioData) {
     try {
+        // Wait for any ongoing audio transitions to complete
+        if (isAudioTransitioning) {
+            timeLog('Waiting for audio transition to complete...');
+            await new Promise(resolve => {
+                const checkTransition = () => {
+                    if (!isAudioTransitioning) {
+                        resolve();
+                    } else {
+                        setTimeout(checkTransition, 10);
+                    }
+                };
+                checkTransition();
+            });
+        }
+
         if (!audioContext) {
             await initializeAudioContext();
         }
 
-        // Get or create the panner for this voice
         const panner = getPersonalityPanner(audioData.voiceId, audioData.position);
         
-        // Create audio element
         const audio = new Audio(URL.createObjectURL(audioData.blob));
         audio.preservesPitch = true;
         
-        // Create and store media element source
         const source = audioContext.createMediaElementSource(audio);
         source.connect(panner);
         
-        // Store both audio element and its source
         currentAudioElement = {
             audio: audio,
             source: source
@@ -218,7 +230,6 @@ async function playAudio(audioData) {
         audio.addEventListener('ended', () => {
             URL.revokeObjectURL(audio.src);
             if (currentAudioElement && currentAudioElement.audio === audio) {
-                // Disconnect the source when done
                 currentAudioElement.source.disconnect();
                 currentAudioElement = null;
                 currentAudioData = null;
@@ -231,6 +242,12 @@ async function playAudio(audioData) {
     } catch (error) {
         console.error('Error playing audio:', error);
         timeLog(`Playback error: ${error.message}`);
+        // Clean up on error
+        if (currentAudioElement) {
+            currentAudioElement.source.disconnect();
+            currentAudioElement = null;
+            currentAudioData = null;
+        }
     }
 }
 
@@ -355,14 +372,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Update the onSpeechEnd handler to properly stop audio
 async function stopCurrentAudio() {
-    if (currentAudioElement) {
-        try {
-            currentAudioElement.audio.pause();
-            currentAudioElement.source.disconnect();
-            currentAudioElement = null;
-            currentAudioData = null;
-        } catch (error) {
-            console.error('Error stopping audio:', error);
-        }
+    if (!currentAudioElement) return;
+
+    isAudioTransitioning = true;
+    try {
+        await currentAudioElement.audio.pause();
+        currentAudioElement.source.disconnect();
+        currentAudioElement = null;
+        currentAudioData = null;
+    } catch (error) {
+        console.error('Error stopping audio:', error);
+    } finally {
+        isAudioTransitioning = false;
     }
 } 

@@ -18,6 +18,9 @@ let processingPromise = null; // Store the current processing promise
 let audioContext;
 let pannerNodes = new Map(); // Store panner nodes for each voice
 let isFirstSpeech = true;
+let analyzerNode;
+let audioMeterInterval;
+let microphoneStream;
 
 // Add Raspberry Pi detection
 const isRaspberryPi = navigator.userAgent.toLowerCase().includes('linux armv');
@@ -43,24 +46,90 @@ async function initializeVAD() {
         }
         timeLog(`Using audio input: ${defaultInput.label || 'Default Device'}`);
 
-        // Configure for Raspberry Pi
+        // Set up audio monitoring to verify microphone is working
+        try {
+            // Get microphone stream for monitoring
+            microphoneStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    deviceId: defaultInput.deviceId,
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false
+                }
+            });
+            
+            // Create analyzer to monitor audio levels
+            if (!analyzerNode) {
+                analyzerNode = audioContext.createAnalyser();
+                analyzerNode.fftSize = 256;
+                analyzerNode.smoothingTimeConstant = 0.3;
+            }
+            
+            // Connect microphone to analyzer
+            const micSource = audioContext.createMediaStreamSource(microphoneStream);
+            micSource.connect(analyzerNode);
+            
+            // Start monitoring audio levels
+            const dataArray = new Uint8Array(analyzerNode.frequencyBinCount);
+            
+            if (audioMeterInterval) {
+                clearInterval(audioMeterInterval);
+            }
+            
+            audioMeterInterval = setInterval(() => {
+                analyzerNode.getByteFrequencyData(dataArray);
+                
+                // Calculate audio level (0-100)
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                }
+                const average = sum / dataArray.length;
+                const level = Math.round((average / 255) * 100);
+                
+                // Log significant audio levels
+                if (level > 5) {
+                    timeLog(`Audio level: ${level}%`);
+                }
+                
+                // If we're getting consistently strong audio but no VAD events,
+                // there might be a problem with the VAD processing
+                if (level > 20) {
+                    document.title = `▶ ${level}%`;
+                } else {
+                    document.title = 'Voice Agent';
+                }
+            }, 100);
+            
+            timeLog('Audio monitoring started');
+        } catch (monitorErr) {
+            console.error('Could not initialize audio monitoring:', monitorErr);
+        }
+        
+        // Configure VAD with debug callbacks
         const vadConfig = {
             model: 'legacy',
-            positiveSpeechThreshold: 0.8,    // Increase threshold for better accuracy
-            negativeSpeechThreshold: 0.5,     // Adjust for less false negatives
-            minSpeechFrames: 5,              // Require more frames for speech detection
+            positiveSpeechThreshold: 0.7,
+            negativeSpeechThreshold: 0.4,
+            minSpeechFrames: 4,
             preSpeechPadFrames: 5,
             audioConstraints: {
                 deviceId: defaultInput.deviceId,
-                echoCancellation: false,      // Disable these on Pi to reduce processing
+                echoCancellation: false,
                 noiseSuppression: false,
                 autoGainControl: false,
                 channelCount: 1,
-                sampleRate: 16000,            // Use lower sample rate
-                latency: 0,                   // Request lowest possible latency
+                sampleRate: 16000
+            },
+            // Add debug callback to monitor frame processing
+            onFrameProcessed: (probabilities) => {
+                // Only log when there's significant probability
+                if (probabilities.isSpeech > 0.3) {
+                    timeLog(`VAD frame: speech=${probabilities.isSpeech.toFixed(2)}, notSpeech=${probabilities.notSpeech.toFixed(2)}`);
+                }
             },
             onSpeechStart: async () => {
-                timeLog('Speech detected');
+                timeLog('🔊 SPEECH DETECTED ��');
                 isCurrentlySpeaking = true;
 
                 if (isFirstSpeech) {
@@ -85,7 +154,7 @@ async function initializeVAD() {
                 }
             },
             onSpeechEnd: async (audio) => {
-                timeLog('Speech ended');
+                timeLog('🔊 SPEECH ENDED ��');
                 isCurrentlySpeaking = false;
 
                 try {
@@ -390,7 +459,21 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('stopBtn').onclick = () => {
         if (vadInstance) {
             vadInstance.pause();
-            console.log("Listening stopped.");
+            timeLog("Listening stopped");
         }
+        
+        // Clean up audio monitoring
+        if (audioMeterInterval) {
+            clearInterval(audioMeterInterval);
+            audioMeterInterval = null;
+        }
+        
+        if (microphoneStream) {
+            microphoneStream.getTracks().forEach(track => track.stop());
+            microphoneStream = null;
+        }
+        
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
     };
 }); 

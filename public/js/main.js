@@ -139,14 +139,13 @@ async function initializeVAD() {
     }
 }
 
-// Update audio context initialization
+// Update audio context initialization with correct sample rate
 async function initializeAudioContext() {
     try {
         if (!audioContext) {
             const contextOptions = {
-                sampleRate: 441000,           // Use lower sample rate
-                latencyHint: 'interactive',
-                bufferSize: 512              // Use smaller buffer for lower latency
+                sampleRate: 44100,           // Standard CD-quality sample rate
+                latencyHint: 'interactive'
             };
             audioContext = new (window.AudioContext || window.webkitAudioContext)(contextOptions);
             timeLog(`Audio context created with sample rate: ${audioContext.sampleRate}`);
@@ -194,75 +193,51 @@ function getPersonalityPanner(personalityId, position) {
     return pannerNodes.get(personalityId);
 }
 
-async function playAudio(data) {
-    if (!data || !data.blob) {
-        console.error('Invalid audio data received');
-        return;
-    }
-
-    const { blob, voiceId: personalityId, position, timestamp } = data;
-    if (!position) {
-        console.error('No position data for personality:', personalityId);
-        return;
-    }
-
-    const startTime = timeLog(`Starting audio playback for personality ${personalityId}...`);
-    
-    if (!audioContext) {
-        initializeAudioContext();
-    }
-    if (audioContext.state === 'suspended') {
-        await audioContext.resume();
-    }
-
-    // Store current audio data with timestamp
-    currentAudioData = {
-        ...data,
-        timestamp: timestamp || Date.now()
-    };
-
-    // Get or create panner for this personality
-    const panner = getPersonalityPanner(personalityId, position);
-
-    if (currentAudioElement) {
-        try {
-            currentAudioElement.stop();
-        } catch (error) {
-            console.error('Error stopping previous audio:', error);
-        }
-        currentAudioElement = null;
-    }
-
-    // Reset playback time for new audio
-    if (currentAudioData !== data) {
-        currentPlaybackTime = 0;
-    }
-
+// Update the playAudio function to include gain control
+async function playAudio(audioData) {
     try {
-        const arrayBuffer = await blob.arrayBuffer();
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-        
-        const source = audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(panner);
-        
-        source.onended = () => {
-            timeLog('Audio playback ended');
-            if (isCurrentlySpeaking && audioQueue.length > 0) {
-                timeLog('Playing next queued audio');
-                currentPlaybackTime = 0;
-                playAudio(audioQueue.shift());
-            }
-        };
-
-        if (isCurrentlySpeaking) {
-            source.start(0, currentPlaybackTime);
-            timeLog('Audio playback started', startTime);
+        if (!audioContext) {
+            await initializeAudioContext();
         }
 
-        currentAudioElement = source;
+        // Create a gain node for volume control
+        //const gainNode = audioContext.createGain();
+        //gainNode.gain.value = 0.5; // Set volume to 50%
+
+        // Get or create the panner for this voice
+        const panner = getPersonalityPanner(audioData.voiceId, audioData.position);
+        
+        // Create audio element
+        const audio = new Audio(URL.createObjectURL(audioData.blob));
+        audio.preservesPitch = true; // Maintain audio quality
+        
+        // Create media element source
+        const source = audioContext.createMediaElementSource(audio);
+        
+        // Connect nodes: source -> gain -> panner -> destination
+        source.connect(gainNode);
+        gainNode.connect(panner);
+        
+        // Store current audio element
+        currentAudioElement = audio;
+        currentAudioData = audioData;
+        
+        // Add event listeners
+        audio.addEventListener('ended', () => {
+            URL.revokeObjectURL(audio.src);
+            if (currentAudioElement === audio) {
+                currentAudioElement = null;
+                currentAudioData = null;
+            }
+        });
+
+        // Start playback
+        await audio.play();
+        timeLog('Started audio playback');
+
     } catch (error) {
-        console.error(`Error playing spatial audio for personality ${personalityId}:`, error);
+        console.error('Error playing audio:', error);
+        timeLog(`Playback error: ${error.message}`);
     }
 }
 
@@ -336,18 +311,17 @@ async function processUserSpeech(transcription) {
     }
 }
 
-// Add more robust error handling to the start button
+// Update getUserMedia options with correct sample rate
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('startBtn').onclick = async () => {
         try {
-            // Request microphone access with explicit error handling
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
                     autoGainControl: true,
                     channelCount: 1,
-                    sampleRate: 441000
+                    sampleRate: 44100  // Standard CD-quality sample rate
                 }
             });
             

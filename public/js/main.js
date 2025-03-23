@@ -86,10 +86,7 @@ async function initializeVAD() {
                 timeLog('Speech ended');
                 isCurrentlySpeaking = false;
 
-                if (currentAudioElement) {
-                    currentAudioElement.stop();
-                    currentAudioElement = null;
-                }
+                await stopCurrentAudio();
 
                 try {
                     const wavBuffer = vad.utils.encodeWAV(audio);
@@ -205,28 +202,29 @@ async function playAudio(audioData) {
         
         // Create audio element
         const audio = new Audio(URL.createObjectURL(audioData.blob));
-        audio.preservesPitch = true; // Maintain audio quality
+        audio.preservesPitch = true;
         
-        // Create media element source
+        // Create and store media element source
         const source = audioContext.createMediaElementSource(audio);
-        
-        // Connect nodes: source -> panner -> destination
         source.connect(panner);
         
-        // Store current audio element
-        currentAudioElement = audio;
+        // Store both audio element and its source
+        currentAudioElement = {
+            audio: audio,
+            source: source
+        };
         currentAudioData = audioData;
         
-        // Add event listeners
         audio.addEventListener('ended', () => {
             URL.revokeObjectURL(audio.src);
-            if (currentAudioElement === audio) {
+            if (currentAudioElement && currentAudioElement.audio === audio) {
+                // Disconnect the source when done
+                currentAudioElement.source.disconnect();
                 currentAudioElement = null;
                 currentAudioData = null;
             }
         });
 
-        // Start playback
         await audio.play();
         timeLog('Started audio playback');
 
@@ -353,4 +351,18 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('startBtn').disabled = false;
         document.getElementById('stopBtn').disabled = true;
     };
-}); 
+});
+
+// Update the onSpeechEnd handler to properly stop audio
+async function stopCurrentAudio() {
+    if (currentAudioElement) {
+        try {
+            currentAudioElement.audio.pause();
+            currentAudioElement.source.disconnect();
+            currentAudioElement = null;
+            currentAudioData = null;
+        } catch (error) {
+            console.error('Error stopping audio:', error);
+        }
+    }
+} 

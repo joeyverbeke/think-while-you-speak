@@ -27,24 +27,40 @@ async function initializeVAD() {
     const startTime = timeLog('Initializing VAD...');
     
     try {
+        // Get audio devices first
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        
+        // Log devices in a more reliable way
+        audioInputs.forEach(device => {
+            timeLog(`Found audio input: ${device.label || 'Unnamed Device'} (${device.deviceId})`);
+        });
+
+        // Get default audio input
+        const defaultInput = audioInputs.find(d => d.deviceId === 'default') || audioInputs[0];
+        if (!defaultInput) {
+            throw new Error('No audio input devices found');
+        }
+        timeLog(`Using audio input: ${defaultInput.label || 'Default Device'}`);
+
         // Configure for Raspberry Pi
         const vadConfig = {
             model: 'legacy',
-            positiveSpeechThreshold: isRaspberryPi ? 0.6 : 0.5,
-            negativeSpeechThreshold: isRaspberryPi ? 0.45 : 0.35,
-            minSpeechFrames: isRaspberryPi ? 5 : 3,
+            positiveSpeechThreshold: 0.8,    // Increase threshold for better accuracy
+            negativeSpeechThreshold: 0.5,     // Adjust for less false negatives
+            minSpeechFrames: 5,              // Require more frames for speech detection
             preSpeechPadFrames: 5,
-            // Specific audio constraints for Raspberry Pi
             audioConstraints: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
+                deviceId: defaultInput.deviceId,
+                echoCancellation: false,      // Disable these on Pi to reduce processing
+                noiseSuppression: false,
+                autoGainControl: false,
                 channelCount: 1,
-                sampleRate: 16000
+                sampleRate: 16000,            // Use lower sample rate
+                latency: 0,                   // Request lowest possible latency
             },
-            // Add the event handlers in the initial config
             onSpeechStart: async () => {
-                timeLog('🎤 Speech detected');
+                timeLog('Speech detected');
                 isCurrentlySpeaking = true;
 
                 if (isFirstSpeech) {
@@ -60,7 +76,7 @@ async function initializeVAD() {
                     }
                     isFirstSpeech = false;
                 } else if (audioQueue.length > 0) {
-                    timeLog('Playing new queued audio');
+                    timeLog('Playing queued audio');
                     currentAudioData = null;
                     playAudio(audioQueue.shift());
                 } else if (currentAudioData) {
@@ -69,22 +85,21 @@ async function initializeVAD() {
                 }
             },
             onSpeechEnd: async (audio) => {
-                timeLog('🎤 Speech ended, processing...');
+                timeLog('Speech ended');
                 isCurrentlySpeaking = false;
 
-                if (currentAudioElement) {
-                    try {
+                try {
+                    // Stop current audio playback
+                    if (currentAudioElement) {
                         currentAudioElement.stop();
                         currentAudioElement = null;
-                    } catch (error) {
-                        console.error('Error stopping audio:', error);
                     }
-                }
 
-                try {
+                    // Convert audio to WAV
                     const wavBuffer = vad.utils.encodeWAV(audio);
                     const base64Audio = vad.utils.arrayBufferToBase64(wavBuffer);
                     
+                    timeLog('Sending audio for transcription...');
                     const response = await fetch('/transcribe', {
                         method: 'POST',
                         headers: {
@@ -94,7 +109,7 @@ async function initializeVAD() {
                     });
 
                     if (!response.ok) {
-                        throw new Error(`Transcription failed with ${response.status}`);
+                        throw new Error(`Transcription failed: ${response.status}`);
                     }
 
                     const { transcription } = await response.json();
@@ -107,29 +122,30 @@ async function initializeVAD() {
                     }
                 } catch (error) {
                     console.error("Error processing speech:", error);
+                    timeLog(`Error: ${error.message}`);
                 }
             }
         };
 
-        // Log device info
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices.filter(device => device.kind === 'audioinput');
-        timeLog('Available audio inputs:', audioInputs.map(d => d.label));
-
-        // Initialize VAD with logging
-        timeLog('Creating VAD with config:', vadConfig);
-        
-        // Create VAD instance
+        // Initialize VAD with detailed logging
+        timeLog('Creating VAD instance...');
         vadInstance = await vad.MicVAD.new(vadConfig);
+        timeLog('VAD instance created');
         
-        // Start VAD
+        // Start VAD with error handling
+        timeLog('Starting VAD...');
         await vadInstance.start();
+        timeLog('VAD started successfully');
+        
+        // Update UI
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = false;
         
         timeLog('VAD initialization complete', startTime);
     } catch (error) {
         console.error("Error initializing VAD:", error);
-        console.error("Detailed error:", error.message);
-        if (error.stack) console.error("Stack trace:", error.stack);
+        timeLog(`VAD Error: ${error.message}`);
+        if (error.stack) timeLog(`Stack trace: ${error.stack}`);
         throw error;
     }
 }
@@ -139,29 +155,33 @@ async function initializeAudioContext() {
     try {
         if (!audioContext) {
             const contextOptions = {
-                // Lower sample rate for better performance on Pi
-                sampleRate: isRaspberryPi ? 16000 : 44100,
-                latencyHint: isRaspberryPi ? 'playback' : 'interactive'
+                sampleRate: 16000,           // Use lower sample rate
+                latencyHint: 'interactive',
+                bufferSize: 512              // Use smaller buffer for lower latency
             };
             audioContext = new (window.AudioContext || window.webkitAudioContext)(contextOptions);
+            timeLog(`Audio context created with sample rate: ${audioContext.sampleRate}`);
         }
         
         if (audioContext.state === 'suspended') {
             await audioContext.resume();
+            timeLog('Audio context resumed');
         }
 
-        // Test audio system
-        const testOsc = audioContext.createOscillator();
-        const testGain = audioContext.createGain();
-        testGain.gain.value = 0; // Silent test
-        testOsc.connect(testGain);
-        testGain.connect(audioContext.destination);
-        testOsc.start();
-        testOsc.stop(audioContext.currentTime + 0.1);
+        // Set up audio context for spatial audio
+        const listener = audioContext.listener;
+        if (typeof listener.positionX !== 'undefined') {
+            listener.positionX.value = 0;
+            listener.positionY.value = 0;
+            listener.positionZ.value = 0;
+        } else {
+            listener.setPosition(0, 0, 0);
+        }
 
         timeLog('Audio context initialized');
     } catch (error) {
         console.error('Audio initialization error:', error);
+        timeLog(`Audio Error: ${error.message}`);
         throw error;
     }
 }

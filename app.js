@@ -29,6 +29,10 @@ const INITIAL_DIR = path.join(AUDIO_DIR, 'initial');
 //Debug mode
 const DEBUG_MODE = process.env.DEBUG_MODE || false;
 
+// Add at the top of the file
+const HEADLESS_MODE = process.env.HEADLESS_MODE === 'true';
+let headlessSystem;
+
 // Add this function to get all available IP addresses
 function getIpAddresses() {
     const interfaces = os.networkInterfaces();
@@ -340,6 +344,22 @@ app.listen(port, '0.0.0.0', () => {  // Listen on all interfaces
     addresses.forEach(ip => {
         timeLog(`Also available at http://${ip}:${port}`);
     });
+    
+    // Start headless mode if configured
+    if (HEADLESS_MODE) {
+        timeLog('Starting in headless mode');
+        headlessSystem = require('./headless');
+        headlessSystem.startHeadless();
+    }
+});
+
+// Add graceful shutdown handling
+process.on('SIGINT', () => {
+    timeLog('Shutting down...');
+    if (HEADLESS_MODE && headlessSystem) {
+        headlessSystem.stopHeadless();
+    }
+    process.exit(0);
 });
 
 //create pi-integration branch

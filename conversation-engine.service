@@ -1,0 +1,20 @@
+[Unit]
+Description=Headless Conversation Engine
+After=network.target
+
+[Service]
+Environment=HEADLESS_MODE=true
+Environment=DEBUG_MODE=false
+Environment=NODE_ENV=production
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/conversation-engine
+ExecStart=/usr/bin/node app.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=conversation-engine
+
+[Install]
+WantedBy=multi-user.target 

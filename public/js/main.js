@@ -321,53 +321,46 @@ async function processUserSpeech(transcription) {
     }
 }
 
-// Update getUserMedia options with correct sample rate
-document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('startBtn').onclick = async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    channelCount: 1,
-                    sampleRate: 44100  // Standard CD-quality sample rate
-                }
-            });
-            
-            timeLog('Microphone access granted');
-            
-            // Test the audio stream
-            const track = stream.getAudioTracks()[0];
-            const capabilities = track.getCapabilities();
-            timeLog('Audio capabilities:', capabilities);
-            
-            // Initialize audio context
-            await initializeAudioContext();
-            
-            // Initialize VAD
-            await initializeVAD();
-            
-            // Update UI
-            document.getElementById('startBtn').disabled = true;
-            document.getElementById('stopBtn').disabled = false;
-            
-        } catch (error) {
-            console.error('Error starting application:', error);
-            timeLog('Failed to start: ' + error.message);
-            // Show error to user
-            alert('Failed to start: ' + error.message);
-        }
-    };
-    
-    document.getElementById('stopBtn').onclick = () => {
-        if (vadInstance) {
-            vadInstance.pause();
-            timeLog("Listening stopped");
-        }
-        document.getElementById('startBtn').disabled = false;
-        document.getElementById('stopBtn').disabled = true;
-    };
+// Remove button click handlers and replace with auto-start
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        // Get microphone access
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                channelCount: 1,
+                sampleRate: 44100
+            }
+        });
+        
+        timeLog('Microphone access granted');
+        
+        // Test the audio stream
+        const track = stream.getAudioTracks()[0];
+        const capabilities = track.getCapabilities();
+        timeLog('Audio capabilities:', capabilities);
+        
+        // Initialize audio context
+        await initializeAudioContext();
+        
+        // Initialize VAD
+        await initializeVAD();
+        
+        // Hide or disable the buttons since we don't need them
+        document.getElementById('startBtn').style.display = 'none';
+        document.getElementById('stopBtn').style.display = 'none';
+        
+    } catch (error) {
+        console.error('Error starting application:', error);
+        timeLog('Failed to start: ' + error.message);
+        // Show error in page since we're headless
+        const errorDiv = document.createElement('div');
+        errorDiv.style.color = 'red';
+        errorDiv.textContent = 'Failed to start: ' + error.message;
+        document.body.appendChild(errorDiv);
+    }
 });
 
 // Update the onSpeechEnd handler to properly stop audio

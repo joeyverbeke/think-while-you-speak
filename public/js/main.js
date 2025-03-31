@@ -28,21 +28,6 @@ async function initializeVAD() {
     const startTime = timeLog('Initializing VAD...');
     
     try {
-        // Get audio devices first
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices.filter(device => device.kind === 'audioinput');
-        
-        audioInputs.forEach(device => {
-            timeLog(`Found audio input: ${device.label || 'Unnamed Device'} (${device.deviceId})`);
-        });
-
-        // Get default audio input
-        const defaultInput = audioInputs.find(d => d.deviceId === 'default') || audioInputs[0];
-        if (!defaultInput) {
-            throw new Error('No audio input devices found');
-        }
-        timeLog(`Using audio input: ${defaultInput.label || 'Default Device'}`);
-
         // Configure VAD
         const vadConfig = {
             model: 'legacy',
@@ -50,14 +35,7 @@ async function initializeVAD() {
             negativeSpeechThreshold: 0.4,
             minSpeechFrames: 4,
             preSpeechPadFrames: 5,
-            audioConstraints: {
-                deviceId: defaultInput.deviceId,
-                echoCancellation: false,
-                noiseSuppression: false,
-                autoGainControl: false,
-                channelCount: 1,
-                sampleRate: 16000
-            },
+            // Let VAD handle its own audio constraints
             onSpeechStart: async () => {
                 timeLog('Speech detected');
                 isCurrentlySpeaking = true;
@@ -125,9 +103,6 @@ async function initializeVAD() {
         vadInstance = await vad.MicVAD.new(vadConfig);
         timeLog('Starting VAD...');
         await vadInstance.start();
-        
-        document.getElementById('startBtn').disabled = true;
-        document.getElementById('stopBtn').disabled = false;
         
         timeLog('VAD initialization complete', startTime);
     } catch (error) {
@@ -324,34 +299,19 @@ async function processUserSpeech(transcription) {
 // Remove button click handlers and replace with auto-start
 document.addEventListener('DOMContentLoaded', async () => {
     try {
-        // Get microphone access
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                channelCount: 1,
-                sampleRate: 44100
-            }
-        });
+        timeLog('Starting application initialization');
         
-        timeLog('Microphone access granted');
-        
-        // Test the audio stream
-        const track = stream.getAudioTracks()[0];
-        const capabilities = track.getCapabilities();
-        timeLog('Audio capabilities:', capabilities);
-        
-        // Initialize audio context
-        await initializeAudioContext();
-        
-        // Initialize VAD
+        // Initialize VAD first - let it handle microphone access
         await initializeVAD();
         
-        // Hide or disable the buttons since we don't need them
+        // Now initialize audio context after VAD is ready
+        await initializeAudioContext();
+        
+        // Hide buttons since we don't need them
         document.getElementById('startBtn').style.display = 'none';
         document.getElementById('stopBtn').style.display = 'none';
         
+        timeLog('Application initialized successfully');
     } catch (error) {
         console.error('Error starting application:', error);
         timeLog('Failed to start: ' + error.message);

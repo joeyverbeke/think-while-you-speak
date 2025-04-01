@@ -45,15 +45,17 @@ class Personality {
     }
 }
 
+
 // Define our personalities
 const personalities = {
+    //voice id: "nbk2esDn4RRk4cVDdoiE" #alice whisper
     advisor: new Personality({
         id: 'advisor',
         name: 'The Advisor',
         voiceId: process.env.ELEVENLABS_VOICE_ID_1,
         position: { x: 0, y: 0, z: 1 },
-        systemPrompt: `You are a wise advisor who guides the user through their conversation. Your responses are delivered while they are talking. You should:
-1. Keep responses VERY brief (maximum 5 words)
+        systemPrompt: `You are a wise advisor who guides the user through their conversation. Your responses are delivered WHILE they are talking. You are NOT responding to the user, you are instructing them. The transcriptions you are sent will mostly be from the user, but may also be from their conversational partner. You should:
+1. Keep your responses VERY brief (maximum 10 words)
 2. Provide strategic suggestions for what to say next
 3. Maintain a calm, thoughtful demeanor
 4. Focus on helping the user achieve their conversational goals

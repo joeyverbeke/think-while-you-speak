@@ -41,6 +41,9 @@ async function initializeVAD() {
                 timeLog('Speech detected');
                 isCurrentlySpeaking = true;
 
+                // Always stop any currently playing audio first
+                await stopCurrentAudio();
+
                 if (isFirstSpeech) {
                     timeLog('Playing initial response');
                     const initialResponse = await fetch('/last-audio');
@@ -192,6 +195,9 @@ function getPersonalityPanner(personalityId, position) {
 // Update the playAudio function to include gain control
 async function playAudio(audioData) {
     try {
+        // Always stop any currently playing audio first
+        await stopCurrentAudio();
+
         // Wait for any ongoing audio transitions to complete
         if (isAudioTransitioning) {
             timeLog('Waiting for audio transition to complete...');
@@ -379,12 +385,44 @@ async function stopCurrentAudio() {
 
     isAudioTransitioning = true;
     try {
-        await currentAudioElement.audio.pause();
-        currentAudioElement.source.disconnect();
-        currentAudioElement = null;
-        currentAudioData = null;
+        timeLog('Stopping current audio playback');
+        
+        // Create a local reference in case currentAudioElement changes during execution
+        const audioToStop = currentAudioElement;
+        
+        // Pause the audio
+        if (audioToStop.audio && !audioToStop.audio.paused) {
+            await audioToStop.audio.pause();
+        }
+        
+        // Disconnect the source
+        if (audioToStop.source) {
+            try {
+                audioToStop.source.disconnect();
+            } catch (e) {
+                // Ignore errors if already disconnected
+            }
+        }
+        
+        // Clear the URL if it exists
+        if (audioToStop.audio && audioToStop.audio.src) {
+            URL.revokeObjectURL(audioToStop.audio.src);
+        }
+        
+        // Clear the references
+        if (currentAudioElement === audioToStop) {
+            currentAudioElement = null;
+            currentAudioData = null;
+        }
+        
+        timeLog('Audio playback stopped');
     } catch (error) {
         console.error('Error stopping audio:', error);
+        timeLog(`Stop audio error: ${error.message}`);
+        
+        // Force reset on error
+        currentAudioElement = null;
+        currentAudioData = null;
     } finally {
         isAudioTransitioning = false;
     }

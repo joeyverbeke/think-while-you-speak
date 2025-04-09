@@ -1,1 +1,18 @@
-# Update on pi
+[Unit]
+Description=VLC Fullscreen Video with Loop and Key Bindings
+After=chromium.service
+Wants=chromium.service
+
+[Service]
+Type=simple
+User=tael
+Environment=DISPLAY=:0
+#ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/cvlc --fullscreen --loop --no-osd --no-audio /home/tael/Desktop/Gradi-Vox_Joey-Koi_compressed.mov --key-quit=q --key-toggle-fullscreen=f
+ExecStartPost=/usr/bin/xdotool search --sync --onlyvisible --class "vlc" windowraise
+Restart=on-failure
+RestartSec=5
+ExecStopPost=/bin/sh -c 'clear > /dev/tty1'
+
+[Install]
+WantedBy=multi-user.target

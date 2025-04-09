@@ -330,7 +330,7 @@ function cleanupOldResponses() {
             .filter(file => file !== lastGeneratedAudio)
             .sort((a, b) => fs.statSync(b).mtime.getTime() - fs.statSync(a).mtime.getTime());
 
-        // Keep only the 5 most recent files
+        // Keep only the 20 most recent files
         const filesToDelete = files.slice(19);
         filesToDelete.forEach(file => {
             fs.unlinkSync(file);

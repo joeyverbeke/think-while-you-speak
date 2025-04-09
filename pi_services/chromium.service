@@ -1,1 +1,36 @@
-# Update on pi
+[Unit]
+Description=Chromium at localhost:3000 (Hidden)
+After=node_server.service
+Wants=node_server.service
+Before=vlc_kiosk.service
+
+[Service]
+Type=simple
+User=tael
+Environment=DISPLAY=:0
+Environment=PULSE_SERVER=/run/user/1000/pulse/native
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/usr/bin/chromium-browser \
+    --noerrdialogs \
+    --disable-infobars \
+    --autoplay-policy=no-user-gesture-required \
+    --use-fake-ui-for-media-stream \
+    --unsafely-treat-insecure-origin-as-secure=http://localhost:3000 \
+    --disable-features=AudioServiceOutOfProcess \
+    --enable-features=VaapiVideoDecoder \
+    --disable-session-crashed-bubble \
+    --disable-restore-session-state \
+    http://localhost:3000
+ExecStartPost=/bin/bash -c '\
+    window_id=""; \
+    while [ -z "$window_id" ]; do \
+        window_id=$(/usr/bin/xdotool search --onlyvisible --class "chromium"); \
+        sleep 1; \
+    done; \
+    sleep 15; \
+    /usr/bin/xdotool windowminimize $window_id'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

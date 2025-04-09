@@ -319,7 +319,6 @@ async function processUserSpeech(transcription) {
     }
 }
 
-// Remove button click handlers and replace with auto-start
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         timeLog('Starting application initialization');
@@ -329,6 +328,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // Now initialize audio context after VAD is ready
         await initializeAudioContext();
+        
+        // Play a short audio immediately to ensure audio works after minimizing
+        try {
+            timeLog('Playing startup audio to ensure audio works when minimized...');
+            const initialResponse = await fetch('/last-audio');
+            if (initialResponse.ok) {
+                const blob = await initialResponse.blob();
+                await playAudio({
+                    blob,
+                    voiceId: 'advisor',
+                    position: { x: 0, y: 0, z: 1 }
+                });
+                timeLog('Startup audio playback initiated');
+            } else {
+                // If no audio file exists yet, play a silent audio to initialize the audio system
+                timeLog('No startup audio available, creating silent audio...');
+                // Create a short silent audio context
+                const silentContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = silentContext.createOscillator();
+                oscillator.connect(silentContext.destination);
+                oscillator.start();
+                oscillator.stop(silentContext.currentTime + 0.1);
+                timeLog('Silent audio played');
+            }
+        } catch (error) {
+            console.error('Error playing startup audio:', error);
+            timeLog('Startup audio error: ' + error.message);
+        }
         
         // Hide buttons since we don't need them
         document.getElementById('startBtn').style.display = 'none';

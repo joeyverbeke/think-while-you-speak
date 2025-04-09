@@ -19,6 +19,7 @@ let audioContext;
 let pannerNodes = new Map(); // Store panner nodes for each voice
 let isFirstSpeech = true;
 let isAudioTransitioning = false;
+let hasInternet = false;
 
 // Add Raspberry Pi detection
 const isRaspberryPi = navigator.userAgent.toLowerCase().includes('linux armv');
@@ -67,34 +68,56 @@ async function initializeVAD() {
 
                 await stopCurrentAudio();
 
-                try {
-                    const wavBuffer = vad.utils.encodeWAV(audio);
-                    const base64Audio = vad.utils.arrayBufferToBase64(wavBuffer);
-                    
-                    timeLog('Sending audio for transcription...');
-                    const response = await fetch('/transcribe', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ audio: base64Audio })
-                    });
+                if(hasInternet) {
+                    try {
+                        const wavBuffer = vad.utils.encodeWAV(audio);
+                        const base64Audio = vad.utils.arrayBufferToBase64(wavBuffer);
+                        
+                        timeLog('Sending audio for transcription...');
+                        const response = await fetch('/transcribe', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ audio: base64Audio })
+                        });
 
-                    if (!response.ok) {
-                        throw new Error(`Transcription failed: ${response.status}`);
+                        if (!response.ok) {
+                            throw new Error(`Transcription failed: ${response.status}`);
+                        }
+
+                        const { transcription } = await response.json();
+                        timeLog(`Transcribed: "${transcription}"`);
+
+                        if (!isProcessing && transcription.trim()) {
+                            isProcessing = true;
+                            await processUserSpeech(transcription);
+                            isProcessing = false;
+                        }
+                    } catch (error) {
+                        console.error("Error processing speech:", error);
+                        timeLog(`Error: ${error.message}`);
                     }
-
-                    const { transcription } = await response.json();
-                    timeLog(`Transcribed: "${transcription}"`);
-
-                    if (!isProcessing && transcription.trim()) {
-                        isProcessing = true;
-                        await processUserSpeech(transcription);
-                        isProcessing = false;
+                } else {
+                    try {
+                        const response = await fetch('/debug-audio');
+                        if (!response.ok) {
+                            throw new Error(`Server responded with ${response.status}`);
+                        }
+                        
+                        const audioBlob = await response.blob();
+                        audioQueue.push({
+                            blob: audioBlob,
+                            voiceId: 'advisor', // Default voice ID for debug mode
+                            position: { x: 0, y: 0, z: 1 }, // Default position
+                            timestamp: Date.now()
+                        });
+                        timeLog('Added debug audio to queue');
+                    } catch (error) {
+                        console.error('Error getting debug audio:', error);
+                        timeLog(`Debug audio error: ${error.message}`);
                     }
-                } catch (error) {
-                    console.error("Error processing speech:", error);
-                    timeLog(`Error: ${error.message}`);
+                    timeLog('No internet connection, using debug audio');
                 }
             }
         };

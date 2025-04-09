@@ -235,6 +235,44 @@ app.get('/last-audio', (req, res) => {
   }
 });
 
+let audioFileIndex = 0;
+
+app.get('/debug-audio', (req, res) => {
+    try {
+        let audioFilePath;
+
+        // In debug mode, cycle through existing files in responses dir
+        const existingFiles = fs.readdirSync(RESPONSES_DIR);
+        if (existingFiles.length > 0) {
+            // // Get random file from responses directory
+            // const randomIndex = Math.floor(Math.random() * existingFiles.length);
+            // audioFilePath = path.join(RESPONSES_DIR, existingFiles[randomIndex]);
+            // timeLog(`DEBUG MODE: Using random audio file ${randomIndex + 1}/${existingFiles.length}: ${audioFilePath}`);
+
+            
+            // Increment global index and wrap around if needed
+            audioFileIndex = (audioFileIndex + 1) % existingFiles.length;
+            audioFilePath = path.join(RESPONSES_DIR, existingFiles[audioFileIndex]);
+            timeLog(`DEBUG MODE: Using audio file ${audioFileIndex + 1}/${existingFiles.length}: ${audioFilePath}`);
+            
+        } else {
+            // Fallback to initial response if no files in responses dir
+            audioFilePath = path.join(INITIAL_DIR, 'initial_response.wav');
+            if (!fs.existsSync(audioFilePath)) {
+                throw new Error("No audio files found in debug mode");
+            }
+            timeLog(`DEBUG MODE: Using initial response file: ${audioFilePath}`);
+        }
+
+        res.set('Content-Type', 'audio/wav');
+        res.send(fs.readFileSync(audioFilePath));
+    } catch (error) {
+        timeLog('Error in debug audio endpoint');
+        console.error(error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Update process-text endpoint with more logging
 app.post('/process-text', async (req, res) => {
     const startTime = timeLog('Starting text-only processing');
@@ -293,7 +331,7 @@ function cleanupOldResponses() {
             .sort((a, b) => fs.statSync(b).mtime.getTime() - fs.statSync(a).mtime.getTime());
 
         // Keep only the 5 most recent files
-        const filesToDelete = files.slice(4);
+        const filesToDelete = files.slice(19);
         filesToDelete.forEach(file => {
             fs.unlinkSync(file);
             timeLog(`Cleaned up old response file: ${file}`);
